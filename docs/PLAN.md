@@ -1,5 +1,5 @@
 ---
-PLAN: "feat: tinywasm/ddl — runtime DDL (repo nuevo) + ddl/conformance, sobre tinywasm/db"
+PLAN: "feat: tinywasm/ddl — runtime DDL (repo nuevo) + ddl/conformance, sobre tinywasm/storage"
 TAG: v0.0.1
 ---
 
@@ -8,26 +8,26 @@ TAG: v0.0.1
 > go install github.com/tinywasm/devflow/cmd/gotest@latest
 > ```
 > Tests SIEMPRE con `gotest`. Publica SIEMPRE con `gopush 'mensaje'` (no `git commit`/`git push`).
-> Este plan **requiere `github.com/tinywasm/db@v0.0.1` ya publicado** — si no resuelve en `go get`,
+> Este plan **requiere `github.com/tinywasm/storage@v0.0.1` ya publicado** — si no resuelve en `go get`,
 > para y repórtalo, no repliques su contrato aquí.
 
-## 0. Corrección 2026-07-16 (tercera pasada) — `ddl` depende de `db`, no de `orm`
+## 0. Corrección 2026-07-16 (tercera pasada) — `ddl` depende de `storage`, no de `orm`
 
 **Cambio respecto a las dos versiones anteriores de este plan.** Primero se decidió romper `orm` de
 una vez (DML-puro) en vez de una migración gradual. Después surgió una pregunta más de fondo: si `orm`
 seguía siendo dueño del contrato de almacenamiento, todo backend seguía dependiendo del ORM completo
 solo para cumplir interfaces. La respuesta fue extraer el contrato mismo a un puerto neutral,
-`tinywasm/db` (razonamiento completo en
+`tinywasm/storage` (razonamiento completo en
 [`DB_PORT_PROPOSAL.md`](https://github.com/tinywasm/app-releases/blob/main/docs/DB_PORT_PROPOSAL.md) —
 no hace falta leerlo para ejecutar este plan, es autocontenido). Consecuencias para `ddl`:
 
-- **`ddl` depende de `db`, nunca de `orm`.** `orm` es ahora una capa ergonómica opcional que ni
+- **`ddl` depende de `storage`, nunca de `orm`.** `orm` es ahora una capa ergonómica opcional que ni
   siquiera sabe que `ddl` existe. Si en algún punto de este documento ves `orm.X`, es un rastro de una
   versión vieja — repórtalo, no lo repliques.
 - **`ddl.New` toma DOS argumentos, no tres.** La versión anterior de este plan pedía
   `New(exec orm.Executor, ddlCompiler ddl.Compiler, dmlCompiler orm.Compiler)` porque `orm.DB` guardaba
-  el executor y el compilador DML por separado. `db.Conn` (el puerto nuevo) ya **une** ambos en un solo
-  valor — así que `ddl.New(conn db.Conn, ddlCompiler ddl.Compiler)` alcanza: `conn` sirve de executor
+  el executor y el compilador DML por separado. `storage.Conn` (el puerto nuevo) ya **une** ambos en un solo
+  valor — así que `ddl.New(conn storage.Conn, ddlCompiler ddl.Compiler)` alcanza: `conn` sirve de executor
   **y** de compilador DML (para el safe-drop de `Sync`, que sigue siendo una lectura DML real, no DDL).
   Ver §3.2.
 - **Gap de diseño corregido en esta pasada:** `ddl.Stmt` (§3.1) no tenía forma de expresar "elimina
@@ -43,13 +43,13 @@ no hace falta leerlo para ejecutar este plan, es autocontenido). Consecuencias p
 
 `tinywasm/orm` mezclaba DML (operar datos) y DDL (crear/migrar esquema) en el mismo `*orm.DB`. Ese
 contrato completo (DML+DDL) se extrajo primero a `orm` (DML) + este repo (DDL), y después el contrato
-DML mismo se extrajo de `orm` a `tinywasm/db` — el puerto neutral que ningún backend debería rodear
+DML mismo se extrajo de `orm` a `tinywasm/storage` — el puerto neutral que ningún backend debería rodear
 importando un ORM. Este repo, `tinywasm/ddl`, **es el runtime de DDL**: absorbe toda la superficie de
 esquema y añade su propio contrato ejecutable `ddl/conformance`. `tinywasm/ddlc` **no** cambia: sigue
 siendo la CLI/codegen leaf que **genera** el SQL DDL (`Exporter.ExportDDL`) — `ddl` la **ejecuta** en
 runtime.
 
-**Alcance de este plan: SOLO `tinywasm/ddl`.** No toques `tinywasm/db`, `tinywasm/orm`, ni ningún
+**Alcance de este plan: SOLO `tinywasm/ddl`.** No toques `tinywasm/storage`, `tinywasm/orm`, ni ningún
 backend.
 
 ## 2. Código de referencia (el algoritmo que hay que portar — ya no vive en ningún repo tal cual,
@@ -95,12 +95,12 @@ func (d *DB) CreateDatabase(name string) error {
 ### 2.2 Introspección de esquema (íntegro, sin cambios de forma respecto a versiones previas)
 
 ```go
-// TableIntrospector is optionally implemented by the injected db.Conn to retrieve column names.
+// TableIntrospector is optionally implemented by the injected storage.Conn to retrieve column names.
 type TableIntrospector interface {
 	TableColumns(table string) ([]string, error)
 }
 
-// SchemaInspector is optionally implemented by db.Conn to expose broader schema introspection.
+// SchemaInspector is optionally implemented by storage.Conn to expose broader schema introspection.
 // If the adapter does not implement it, the db_schema MCP tool is not registered.
 type SchemaInspector interface {
 	Tables() ([]string, error)
@@ -116,7 +116,7 @@ type ColumnInfo struct {
 }
 ```
 
-### 2.3 El algoritmo `Sync`/`SyncSchema` (íntegro, ya traducido a `db.Conn` + `Stmt`/`Op`)
+### 2.3 El algoritmo `Sync`/`SyncSchema` (íntegro, ya traducido a `storage.Conn` + `Stmt`/`Op`)
 
 ```go
 // RenameProvider is implemented by generated models when db:"old_name=X" tags are present.
@@ -147,7 +147,7 @@ func (d *DB) Sync(models ...model.Model) error {
 	if len(models) == 0 {
 		return nil
 	}
-	txExec, ok := d.conn.(db.TxExecutor)
+	txExec, ok := d.conn.(storage.TxExecutor)
 	if !ok {
 		return d.syncAll(models...)
 	}
@@ -168,11 +168,11 @@ func (d *DB) Sync(models ...model.Model) error {
 	return bound.Commit()
 }
 
-// boundConn satisfies db.Conn by composing a transaction-bound Executor with the original
+// boundConn satisfies storage.Conn by composing a transaction-bound Executor with the original
 // connection's Compiler half.
 type boundConn struct {
-	db.TxBoundExecutor
-	db.Compiler
+	storage.TxBoundExecutor
+	storage.Compiler
 }
 
 func (d *DB) syncAll(models ...model.Model) error {
@@ -244,14 +244,14 @@ func (d *DB) syncModel(m model.Model) error {
 		}
 
 		// Safe check: SELECT 1 FROM <table> WHERE <col> IS NOT NULL LIMIT 1 — this is a DML
-		// read. Compiled with d.conn's Compiler half (db.Compiler) — the SAME conn used for
+		// read. Compiled with d.conn's Compiler half (storage.Compiler) — the SAME conn used for
 		// Exec, not the DDL compiler. ddl.Stmt/ddl.Op cannot express a SELECT with
-		// conditions — don't try; reuse db.Query/db.Condition as-is for this one case.
-		qCheck := db.Query{
-			Action:     db.ActionReadAll,
+		// conditions — don't try; reuse storage.Query/storage.Condition as-is for this one case.
+		qCheck := storage.Query{
+			Action:     storage.ActionReadAll,
 			Table:      tableName,
 			Columns:    []string{"1"},
-			Conditions: []db.Condition{db.IsNotNull(col)},
+			Conditions: []storage.Condition{storage.IsNotNull(col)},
 			Limit:      1,
 		}
 		plan, err := d.conn.Compile(qCheck, m)
@@ -324,7 +324,7 @@ func isRenameSource(oldNames map[string]string, col string) bool {
 
 ## 3. Diseño del paquete `ddl`
 
-`module github.com/tinywasm/ddl`, `go 1.25.2`. Depende de `tinywasm/db`, `tinywasm/ddlc`,
+`module github.com/tinywasm/ddl`, `go 1.25.2`. Depende de `tinywasm/storage`, `tinywasm/ddlc`,
 `tinywasm/model`, `tinywasm/fmt`. **Cero `tinywasm/orm`.**
 
 ### 3.1 `ddl.Compiler`, `Op`, `Stmt` — el contrato DDL del dialecto
@@ -336,7 +336,7 @@ import (
 	"github.com/tinywasm/model"
 )
 
-// Op is a DDL operation (schema), distinct from db's DML Action.
+// Op is a DDL operation (schema), distinct from storage's DML Action.
 type Op int
 
 const (
@@ -348,7 +348,7 @@ const (
 	OpDropColumn
 )
 
-// Stmt is one DDL statement to run through a db.Conn.
+// Stmt is one DDL statement to run through a storage.Conn.
 type Stmt struct {
 	Op       Op
 	Table    string
@@ -364,7 +364,7 @@ type Stmt struct {
 }
 
 // Compiler is implemented by dialect adapters (sqlt, postgres). It renders a DDL Stmt to
-// engine SQL. It is the DDL counterpart of db.Compiler (which stays DML-only).
+// engine SQL. It is the DDL counterpart of storage.Compiler (which stays DML-only).
 type Compiler interface {
 	CompileDDL(s Stmt, m model.Model) (query string, args []any, err error)
 }
@@ -380,20 +380,20 @@ type Compiler interface {
 package ddl
 
 import (
-	"github.com/tinywasm/db"
+	"github.com/tinywasm/storage"
 	"github.com/tinywasm/model"
 )
 
-// DB applies schema changes through a db.Conn: Exec for the compiled DDL, and Compile (the
-// DML half db.Conn already carries) for Sync's safe-drop SELECT probe. No separate DML
-// compiler argument is needed — db.Conn already unifies Executor+Compiler.
+// DB applies schema changes through a storage.Conn: Exec for the compiled DDL, and Compile (the
+// DML half storage.Conn already carries) for Sync's safe-drop SELECT probe. No separate DML
+// compiler argument is needed — storage.Conn already unifies Executor+Compiler.
 type DB struct {
-	conn        db.Conn
+	conn        storage.Conn
 	ddlCompiler Compiler
 	log         func(...any)
 }
 
-func New(conn db.Conn, ddlCompiler Compiler) *DB {
+func New(conn storage.Conn, ddlCompiler Compiler) *DB {
 	return &DB{conn: conn, ddlCompiler: ddlCompiler}
 }
 
@@ -409,21 +409,21 @@ func (d *DB) logw(messages ...any) {
 - `CreateTable`/`DropTable`/`CreateDatabase`: §2.1.
 - `SyncSchema`/`Sync`/`syncAll`/`syncModel`/`execDDL`/helpers: §2.3, íntegro.
 - `TableIntrospector`/`SchemaInspector`+`ColumnInfo`: §2.2, íntegro.
-- **Receiver `d`, no `db`.** Este paquete importa `github.com/tinywasm/db` — si usas `db` como nombre
-  de receiver (`func (db *DB) ...`), sombreas el paquete dentro de cada método y no puedes escribir
-  `db.Conn`/`db.Query`/etc. Usa `d` consistentemente, como en §2.1–§2.3.
+- **Receiver `d`, no `storage`.** Este paquete importa `github.com/tinywasm/storage` — si usas `storage` como nombre
+  de receiver (`func (storage *DB) ...`), sombreas el paquete dentro de cada método y no puedes escribir
+  `storage.Conn`/`storage.Query`/etc. Usa `d` consistentemente, como en §2.1–§2.3.
 
 ### 3.3 `ddl/conformance` — contrato ejecutable de DDL (solo backends SQL)
 
-`package conformance`, importa `testing`+`ddl`+`db`+`model`. Mismo patrón que `db/conformance` y
+`package conformance`, importa `testing`+`ddl`+`storage`+`model`. Mismo patrón que `storage/conformance` y
 `router/conformance`.
 
 ```go
 type Factory struct {
 	Name string
-	// New returns a fresh ddl.DB plus the db.Conn it writes through (for introspection/DML
+	// New returns a fresh ddl.DB plus the storage.Conn it writes through (for introspection/DML
 	// verification) and an introspector to read back the resulting schema. Called once per clause.
-	New func(t *testing.T) (schema *ddl.DB, conn db.Conn, cols func(table string) []string)
+	New func(t *testing.T) (schema *ddl.DB, conn storage.Conn, cols func(table string) []string)
 }
 
 func Run(t *testing.T, f Factory) {
@@ -434,49 +434,49 @@ func Run(t *testing.T, f Factory) {
 }
 ```
 
-Usa el mismo modelo `Widget` que `db/conformance` (id TEXT PK, name TEXT, qty INT, active BOOL) —
-impórtalo de `conformance.Widget` (paquete `github.com/tinywasm/db/conformance`, ya publicado en
-`db@v0.0.1+`) para no duplicar el fixture.
+Usa el mismo modelo `Widget` que `storage/conformance` (id TEXT PK, name TEXT, qty INT, active BOOL) —
+impórtalo de `conformance.Widget` (paquete `github.com/tinywasm/storage/conformance`, ya publicado en
+`storage@v0.0.1+`) para no duplicar el fixture.
 
-> Backends que entran: **`sqlt`(sqlite)** y **`postgres`**. `indexdb`/`db/mem` **no** — no hacen DDL
+> Backends que entran: **`sqlt`(sqlite)** y **`postgres`**. `indexdb`/`storage/mem` **no** — no hacen DDL
 > SQL.
 
 ## 4. Tests del propio repo
 
 - `ddl/conformance` no se auto-prueba (necesita un dialecto real); su cobertura la dan sqlt/postgres.
 - `ddl` (runtime) SÍ necesita test propio: un `ddl.Compiler` mock que registre los `Stmt` emitidos, y
-  un `db.Conn` que combine `db/mock.Executor` (para `Exec`) con `db/mock.Compiler` (para el
-  `dmlCompiler` del safe-drop) — usa `github.com/tinywasm/db/mock` (ya publicado en `db@v0.0.1+`), no
+  un `storage.Conn` que combine `storage/mock.Executor` (para `Exec`) con `storage/mock.Compiler` (para el
+  `dmlCompiler` del safe-drop) — usa `github.com/tinywasm/storage/mock` (ya publicado en `storage@v0.0.1+`), no
   repliques recorders locales. Verifica que `CreateTable`/`Sync` emiten los `Op` correctos en el orden
   correcto (incl. el algoritmo de rename/safe-drop). Cobertura alta del runtime.
 - **Sin `map[K]V`** en ningún test ni código de este repo — ver `AGENTS.md`.
 
 ## 5. Criterios de aceptación
 
-- `github.com/tinywasm/ddl` existe (gonew, ya hecho), `go 1.25.2`, deps `db`+`ddlc`+`model`+`fmt`.
+- `github.com/tinywasm/ddl` existe (gonew, ya hecho), `go 1.25.2`, deps `storage`+`ddlc`+`model`+`fmt`.
   **Cero `tinywasm/orm`.**
-- `ddl.New(conn db.Conn, ddlCompiler ddl.Compiler) *ddl.DB` (2 argumentos) con
+- `ddl.New(conn storage.Conn, ddlCompiler ddl.Compiler) *ddl.DB` (2 argumentos) con
   `CreateTable/DropTable/CreateDatabase/Sync/SyncSchema`; `ddl.Compiler`/`ddl.Stmt` (con
   `ColumnName` para `OpDropColumn`, §3.1)/`ddl.Op`; algoritmo `Sync` migrado (con
   `TableIntrospector`/`RenameProvider`), transacción propia vía `boundConn` (sin depender de un
-  método `Tx` externo), safe-drop vía `conn.Compile` (el mismo `db.Conn`, no un segundo argumento).
+  método `Tx` externo), safe-drop vía `conn.Compile` (el mismo `storage.Conn`, no un segundo argumento).
 - `ddl/conformance` con `Run(t, Factory)` + ≥4 cláusulas, reusa `conformance.Widget` de
-  `db/conformance`.
-- Test runtime verde contra `db/mock` (recorders) — sin recorders locales duplicados.
-- `ddl` no importa ningún driver SQL. `db` no depende de `ddl`/`ddlc` (dirección única).
+  `storage/conformance`.
+- Test runtime verde contra `storage/mock` (recorders) — sin recorders locales duplicados.
+- `ddl` no importa ningún driver SQL. `storage` no depende de `ddl`/`ddlc` (dirección única).
 - `gotest` verde; publicado `ddl@v0.0.1` con `gopush`.
 
 ## 6. Etapas
 
 | # | Etapa | Archivo(s) | Criterio |
 |---|---|---|---|
-| 1 | go.mod deps | — | deps `db`/`ddlc`/`model`/`fmt` añadidas, **sin** `orm` |
+| 1 | go.mod deps | — | deps `storage`/`ddlc`/`model`/`fmt` añadidas, **sin** `orm` |
 | 2 | `Compiler`/`Stmt`/`Op` | `compiler.go` | interfaz DDL del dialecto, `Stmt.ColumnName` incluido (§3.1) |
 | 3 | `ddl.DB` + Sync migrado | `db.go`, `sync.go` | `New(conn, ddlCompiler)` 2-arg; `boundConn`; §2.1/§2.3 |
 | 4 | introspección | `schema.go` | `TableIntrospector`/`SchemaInspector`/`ColumnInfo` (§2.2) |
-| 5 | `ddl/conformance` | `conformance/conformance.go` | `Run`+`Factory`+≥4 cláusulas, reusa `db/conformance.Widget` |
-| 6 | test runtime | `ddl_test.go` | Stmt emitidos correctos vía `db/mock` |
-| 7 | publicar | — | `gotest` verde; `gopush 'feat: runtime DDL + conformance sobre tinywasm/db'` |
+| 5 | `ddl/conformance` | `conformance/conformance.go` | `Run`+`Factory`+≥4 cláusulas, reusa `storage/conformance.Widget` |
+| 6 | test runtime | `ddl_test.go` | Stmt emitidos correctos vía `storage/mock` |
+| 7 | publicar | — | `gotest` verde; `gopush 'feat: runtime DDL + conformance sobre tinywasm/storage'` |
 
 ## 7. Cierre
 
