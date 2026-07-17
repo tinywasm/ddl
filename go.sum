@@ -1,0 +1,10 @@
+github.com/tinywasm/db v0.0.1 h1:1So3TjycKmDd8LT2zdFeLxYcTIvp0e2Gsoi4BqgPqxI=
+github.com/tinywasm/db v0.0.1/go.mod h1:P4ira4J6gYNqwMX6UayvMoMGpN0C6/x47YAu6xHIiwM=
+github.com/tinywasm/ddlc v0.0.5 h1:QBZ9TfseoRnvqvoTFG7JAhf2j+Qa3ohaTka4P25BKAs=
+github.com/tinywasm/ddlc v0.0.5/go.mod h1://RkYWsU2TcnT1A3qm6xnD9WRWSlnpR2TcnQPWITbrE=
+github.com/tinywasm/fmt v0.25.3 h1:CkyjeKvSFM8BxRWleb4gaPak8Fe+VKPWvnW0UU7KvQE=
+github.com/tinywasm/fmt v0.25.3/go.mod h1:L2GCAi6asgytPV6TVvGrRq5Ml+DkUt1Ijo5i/2J1jOY=
+github.com/tinywasm/model v0.0.15 h1:EpDMgfTq83PzSBVkDU2Ug6B1XRvsk0Ki+scJSf9chfU=
+github.com/tinywasm/model v0.0.15/go.mod h1:wkYZLW6CWVrlx5TiLEBL71KgDxhjUcFtY3KXZKpkCXA=
+github.com/tinywasm/storage v0.0.2-0.20260717121821-7e528006807f h1:pUgAGvJFbNcBjRscHmA15A8AbdCinZ8wp8AzsOs/tz8=
+github.com/tinywasm/storage v0.0.2-0.20260717121821-7e528006807f/go.mod h1:mF48cBANp2vWkgj2EbpurNY5QY4fYqpCTwbNaaLM5Ic=
