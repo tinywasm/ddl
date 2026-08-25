@@ -2,6 +2,8 @@
 PLAN: "feat!: ddl.New accepts Execer — a DDL-only connection no longer has to fake Query"
 EXECUTOR: jules
 REVIEWER: none
+STATUS: running
+SESSION: 12032918283376205578
 ---
 
 > This plan is dispatched via the CodeJob workflow. See skill: agents-workflow.
