@@ -451,3 +451,68 @@ func TestSync_Transaction_Rollback(t *testing.T) {
 		t.Errorf("expected Rollback to be called on error")
 	}
 }
+
+type ddlOnlyConn struct {
+	executed []string
+}
+
+func (d *ddlOnlyConn) Exec(query string, args ...any) error {
+	d.executed = append(d.executed, query)
+	return nil
+}
+
+type ddlOnlyWithIntro struct {
+	ddlOnlyConn
+	columns []string
+}
+
+func (d *ddlOnlyWithIntro) TableColumns(table string) ([]string, error) {
+	return d.columns, nil
+}
+
+func TestNew_AcceptsDDLOnlyConn(t *testing.T) {
+	conn := &ddlOnlyConn{}
+	ddlComp := &mockDDLCompiler{}
+
+	db := ddl.New(conn, ddlComp)
+	m := &mock.Model{
+		Table: "test_table",
+		Sch: []model.Field{
+			{Name: "id", Type: model.Text()},
+		},
+	}
+
+	err := db.Sync(m)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(conn.executed) != 2 {
+		t.Fatalf("expected 2 executed statements (CreateTable + AddColumn), got %d: %v", len(conn.executed), conn.executed)
+	}
+}
+
+func TestSync_DDLOnlyConn_SkipsSafeDrop(t *testing.T) {
+	conn := &ddlOnlyWithIntro{
+		columns: []string{"id", "obsolete_column"},
+	}
+	ddlComp := &mockDDLCompiler{}
+
+	db := ddl.New(conn, ddlComp)
+	m := &mock.Model{
+		Table: "test_table",
+		Sch: []model.Field{
+			{Name: "id", Type: model.Text()},
+		},
+	}
+
+	err := db.Sync(m)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should only call CreateTable (1 statement). OpDropColumn is skipped because connection cannot probe data.
+	if len(ddlComp.Stmts) != 1 || ddlComp.Stmts[0].Op != ddl.OpCreateTable {
+		t.Fatalf("expected only OpCreateTable statement, got %v", ddlComp.Stmts)
+	}
+}

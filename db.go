@@ -2,19 +2,32 @@ package ddl
 
 import (
 	"github.com/tinywasm/model"
-	"github.com/tinywasm/storage"
 )
 
-// DB applies schema changes through a storage.Conn: Exec for the compiled DDL, and Compile (the
-// DML half storage.Conn already carries) for Sync's safe-drop SELECT probe. No separate DML
-// compiler argument is needed — storage.Conn already unifies Executor+Compiler.
+// Execer is the only capability ddl.DB always needs from its connection:
+// somewhere to send compiled DDL. Everything else Sync can use —
+// storage.Compiler and Query for the safe-drop probe, storage.TxExecutor for
+// transactional sync, TableIntrospector/SchemaInspector for reconciliation —
+// is optional and discovered by type assertion, so requiring the full
+// storage.Conn here excluded connections that legitimately execute DDL and
+// nothing else (a CI migration transport over an HTTP API, for instance).
+// storage.Conn satisfies this interface, so every existing caller is
+// unaffected.
+type Execer interface {
+	Exec(query string, args ...any) error
+}
+
+// DB applies schema changes through an Execer: Exec for the compiled DDL.
+// When the connection also satisfies storage.Compiler and exposes Query,
+// Sync additionally runs its safe-drop probe (see sync.go); when it does
+// not, Sync takes the additive path that needs neither.
 type DB struct {
-	conn        storage.Conn
+	conn        Execer
 	ddlCompiler Compiler
 	log         func(...any)
 }
 
-func New(conn storage.Conn, ddlCompiler Compiler) *DB {
+func New(conn Execer, ddlCompiler Compiler) *DB {
 	return &DB{conn: conn, ddlCompiler: ddlCompiler}
 }
 

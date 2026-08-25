@@ -34,7 +34,8 @@ func (d *DB) Sync(models ...model.Model) error {
 		return nil
 	}
 	txExec, ok := d.conn.(storage.TxExecutor)
-	if !ok {
+	dmlCompiler, hasCompiler := d.conn.(storage.Compiler)
+	if !ok || !hasCompiler {
 		return d.syncAll(models...)
 	}
 	bound, err := txExec.BeginTx()
@@ -46,23 +47,23 @@ func (d *DB) Sync(models ...model.Model) error {
 	// does) — same pattern orm.DB.Tx uses for the exact same reason, see
 	// https://github.com/tinywasm/orm/blob/main/docs/PLAN.md §4.3. ddl doesn't import orm,
 	// so this is a small independent copy of the same idea, not a shared type.
-	var conn storage.Conn = boundConn{TxBoundExecutor: bound, Compiler: d.conn}
+	var conn storage.Conn = boundConn{TxBoundExecutor: bound, Compiler: dmlCompiler}
 	intro, hasIntro := d.conn.(TableIntrospector)
 	inspect, hasInspect := d.conn.(SchemaInspector)
 	if hasIntro && hasInspect {
 		conn = boundConnWithBoth{
-			boundConn:         boundConn{TxBoundExecutor: bound, Compiler: d.conn},
+			boundConn:         boundConn{TxBoundExecutor: bound, Compiler: dmlCompiler},
 			TableIntrospector: intro,
 			SchemaInspector:   inspect,
 		}
 	} else if hasIntro {
 		conn = boundConnWithIntrospector{
-			boundConn:         boundConn{TxBoundExecutor: bound, Compiler: d.conn},
+			boundConn:         boundConn{TxBoundExecutor: bound, Compiler: dmlCompiler},
 			TableIntrospector: intro,
 		}
 	} else if hasInspect {
 		conn = boundConnWithSchema{
-			boundConn:         boundConn{TxBoundExecutor: bound, Compiler: d.conn},
+			boundConn:         boundConn{TxBoundExecutor: bound, Compiler: dmlCompiler},
 			SchemaInspector:   inspect,
 		}
 	}
@@ -160,14 +161,29 @@ func (d *DB) syncModel(m model.Model) error {
 		}
 	}
 
-	// 6. Reconcile Safe Drops
+	// 6. Reconcile Safe Drops — needs the DML half (Compile + Query) to ask
+	// whether a column about to be dropped still holds data. A connection
+	// without it (a DDL-only migration transport) skips the drop rather than
+	// dropping blind: losing a populated column is unrecoverable, and no
+	// probe means no evidence it is empty.
+	prober, canProbe := d.conn.(interface {
+		storage.Compiler
+		Query(query string, args ...any) (storage.Rows, error)
+	})
+	if !canProbe {
+		if len(existingCols) > 0 {
+			d.logw("sync:", tableName, "safe drop skipped: connection cannot probe for data")
+		}
+		return nil
+	}
+
 	for _, col := range existingCols {
 		if schemaHasColumn(schema, col) || isRenameSource(oldNames, col) {
 			continue
 		}
 
 		// Safe check: SELECT 1 FROM <table> WHERE <col> IS NOT NULL LIMIT 1 — this is a DML
-		// read. Compiled with d.conn's Compiler half (storage.Compiler) — the SAME conn used for
+		// read. Compiled with prober's Compiler half (storage.Compiler) — the SAME conn used for
 		// Exec, not the DDL compiler. ddl.Stmt/ddl.Op cannot express a SELECT with
 		// conditions — don't try; reuse storage.Query/storage.Condition as-is for this one case.
 		qCheck := storage.Query{
@@ -177,12 +193,12 @@ func (d *DB) syncModel(m model.Model) error {
 			Conditions: []storage.Condition{storage.IsNotNull(col)},
 			Limit:      1,
 		}
-		plan, err := d.conn.Compile(qCheck, m)
+		plan, err := prober.Compile(qCheck, m)
 		if err != nil {
 			d.logw("sync:", tableName, "safe drop check compile failed for column", col, ":", err)
 			continue
 		}
-		rows, err := d.conn.Query(plan.Query, plan.Args...)
+		rows, err := prober.Query(plan.Query, plan.Args...)
 		if err != nil {
 			d.logw("sync:", tableName, "safe drop check query failed for column", col, ":", err)
 			continue
