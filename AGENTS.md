@@ -51,10 +51,13 @@ wasm target — so there is no "backend-only" exemption.
   `Query`/`Condition`/`TxExecutor`), `github.com/tinywasm/model`, and `github.com/tinywasm/fmt`.
   **Never `github.com/tinywasm/orm`** — `ddl` and `orm` are siblings over `storage`, not a dependency
   of each other.
-- **`ddl.DB` holds a `storage.Conn` + a `ddl.Compiler`, nothing else.** `storage.Conn` already unifies
-  Executor+Compiler(DML), so `Sync`'s safe-drop probe uses `conn.Compile` directly — no separate DML
-  compiler argument. `ddl.DB` implements its own transaction wrapping (`boundConn`, `sync.go`) — it
-  isn't an `orm.DB` and doesn't call anything from `orm`.
+- **`ddl.DB` holds an `Execer` + a `ddl.Compiler`, nothing else.** `Execer` requires only `Exec`.
+  `storage.Compiler`, `Query`, `storage.TxExecutor`, `TableIntrospector`, and `SchemaInspector`
+  are all optional capabilities discovered by type assertion. `Sync`'s safe-drop probe uses
+  `conn.Compile` / `conn.Query` when present; when absent, it takes an additive path or skips
+  safe drops — no separate DML compiler argument is required. `ddl.DB` implements its own
+  transaction wrapping (`boundConn`, `sync.go`) — it isn't an `orm.DB` and doesn't call anything
+  from `orm`.
 - **Do not use `tinygo` as a build tag** — not a real Go build constraint. Use `GOOS=js GOARCH=wasm` to
   build for wasm, `gotest -tinygo` to test against the TinyGo compiler specifically.
 
